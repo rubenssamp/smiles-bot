@@ -3,45 +3,45 @@ import smtplib
 from email.mime.text import MIMEText
 from playwright.async_api import async_playwright
 import os
+import re
 
 GMAIL_USER = "rubenssamp@gmail.com"
 GMAIL_PASS = os.environ["GMAIL_APP_PASSWORD"]
+
+BUSCAS = [
+    {
+        "label": "Retorno 25/jan",
+        "url": "https://www.smiles.com.br/mfe/emissao-passagem/?adults=1&cabin=ECONOMIC&children=0&departureDate=1800500400000&infants=0&isElegible=false&isFlexibleDateChecked=false&returnDate=1800846000000&searchType=g3&segments=1&tripType=1&originAirport=FOR&originCity=&originCountry=&originAirportIsAny=false&destinationAirport=SAO&destinCity=&destinCountry=&destinAirportIsAny=true&novo-resultado-voos=true"
+    },
+    {
+        "label": "Retorno 26/jan",
+        "url": "https://www.smiles.com.br/mfe/emissao-passagem/?adults=1&cabin=ECONOMIC&children=0&departureDate=1800500400000&infants=0&isElegible=false&isFlexibleDateChecked=false&returnDate=1800932400000&searchType=g3&segments=1&tripType=1&originAirport=FOR&originCity=&originCountry=&originAirportIsAny=false&destinationAirport=SAO&destinCity=&destinCountry=&destinAirportIsAny=true&novo-resultado-voos=true"
+    },
+]
 
 async def buscar_milhas():
     resultados = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
 
-        await page.goto("https://www.smiles.com.br/home")
-        await page.wait_for_timeout(5000)
+        for busca in BUSCAS:
+            print(f"Buscando: {busca['label']}")
+            await page.goto(busca["url"])
+            await page.wait_for_timeout(10000)
 
-        # Aceitar cookies
-        try:
-            await page.get_by_text("Aceitar").click()
-            await page.wait_for_timeout(1000)
-        except:
-            pass
+            # Tentar aceitar cookies
+            try:
+                await page.get_by_text("Aceitar").click()
+                await page.wait_for_timeout(2000)
+            except:
+                pass
 
-        # Buscas: ida 21/01, retorno 25/01 e 26/01
-        buscas = [
-            {"ida": "2027-01-21", "volta": "2027-01-25", "label": "Retorno 25/jan"},
-            {"ida": "2027-01-21", "volta": "2027-01-26", "label": "Retorno 26/jan"},
-        ]
-
-        for busca in buscas:
-            url = (
-                "https://www.smiles.com.br/passagem-de-aviao"
-                f"?originAirportCode=FOR"
-                f"&destinationAirportCode=GRU"
-                f"&departureDate={busca['ida']}"
-                f"&returnDate={busca['volta']}"
-                f"&adults=1&children=0&infants=0"
-                f"&tripType=2&cabinType=economic&currencyCode=BRL"
-            )
-
-            await page.goto(url)
+            # Aguardar mais o carregamento
             await page.wait_for_timeout(8000)
 
             # Tentar ordenar por menor preço
@@ -49,27 +49,37 @@ async def buscar_milhas():
                 await page.get_by_text("Ordenar").first.click()
                 await page.wait_for_timeout(1000)
                 await page.get_by_text("Menor preço").first.click()
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(5000)
             except:
-                pass
+                print("Botão ordenar não encontrado")
 
             # Capturar milhas
             page_text = await page.inner_text("body")
             milhas = None
+
             for linha in page_text.split("\n"):
-                if "milhas" in linha.lower() and "partir" in linha.lower():
-                    milhas = linha.strip()
+                linha = linha.strip()
+                if "partir" in linha.lower() and "milhas" in linha.lower():
+                    milhas = linha
                     break
 
-            resultados.append(f"{busca['label']}: {milhas or 'Não encontrado'}")
-            print(resultados[-1])
+            # Tentar capturar por regex se não achou
+            if not milhas:
+                numeros = re.findall(r'[\d\.]+\s*milhas', page_text, re.IGNORECASE)
+                if numeros:
+                    milhas = f"A partir de {numeros[0]}"
+
+            resultado = f"{busca['label']}: {milhas or 'Não encontrado'}"
+            print(resultado)
+            resultados.append(resultado)
 
         await browser.close()
 
     return resultados
 
 def enviar_email(resultados):
-    corpo = "\n".join(resultados)
+    corpo = "Resultado da busca de passagens FOR → SAO em milhas:\n\n"
+    corpo += "\n".join(resultados)
     corpo += "\n\nhttps://www.smiles.com.br"
 
     msg = MIMEText(corpo)

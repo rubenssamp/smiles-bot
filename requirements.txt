@@ -1,1 +1,2 @@
-playwright
+undetected-chromedriver
+selenium
